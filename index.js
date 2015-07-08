@@ -5,10 +5,7 @@ var urlparse = require('url').parse,
     urlformat = require('url').format,
     _ = require('lodash'),
     vb = require('virtualbox'),
-    sleep = require('deasync').sleep,
-    extend = require('util')._extend,
-    processName = 'iexplore.exe',
-    PROCESS_NAME = 'C:\\Program Files\\Internet Explorer\\' + processName;
+    PROCESS_NAME = 'C:\\Program Files\\Internet Explorer\\iexplore.exe';
 
 module.exports = {
     'launcher:VirtualBoxBrowser': ['type', VirtualBoxBrowserInstance]
@@ -24,13 +21,12 @@ VirtualBoxBrowserInstance.prototype = {
 };
 
 function VirtualBoxBrowserInstance(baseBrowserDecorator, logger, args) {
-
+    console.log('constructor start');
     args.config = _.defaults(args.config, {
         vm_name: null,
         user: 'IEUser',
         password: 'Passw0rd!',
-        use_gui: false,
-        shutdown : false
+        use_gui: false
     });
 
     if (!args.config.vm_name) {
@@ -46,20 +42,6 @@ function VirtualBoxBrowserInstance(baseBrowserDecorator, logger, args) {
     };
 
     baseBrowserDecorator(this);
-    
-    this.kill = function(callback) {
-        var that = this;
-        vb.kill({
-            user: that.credentials.user,
-            password: that.credentials.password,
-            vm: that.vm_name,
-            cmd: PROCESS_NAME,
-            image_name: "iexplore.exe"
-        }, function(err) {
-        callback.call();
-      });
-      return true;
-    }
 
     var log = logger.create('launcher:' + this.name),
         flags = args.flags || {};
@@ -81,63 +63,31 @@ function VirtualBoxBrowserInstance(baseBrowserDecorator, logger, args) {
     };
 
     this._exec = function(url) {
-
-      var that = this;
-      var conf = {
-        user: that.credentials.user,
-        password: that.credentials.password,
-        vm: that.vm_name,
-        cmd: PROCESS_NAME,
-        params: url
-      };
-
-      var maxtime = 120000,
-          timetick = 15000,
-          curtime = 0;
-
-      function syncFunc() {
-        var sync = true;
-        while(sync) {
-          vb.exec(conf, function(err){
+        var that = this;
+        vb.exec({
+            user: that.credentials.user,
+            password: that.credentials.password,
+            vm: that.vm_name,
+            cmd: PROCESS_NAME,
+            params: url
+        }, function(err, session) {
             if (err) {
-              if (/The guest execution service is not ready/.test(err.message)) {
-                if (curtime >= maxtime) {
-                  sync = false;
-                  throw err;
-                } else {
-                  curtime += timetick;
-                }
-              } else {
-                sync = false;
                 throw err;
-              }
-            } else {
-              sync = false;
             }
-          });
-          if (sync) {
-            sleep(timetick);
-          }
-        }
-        return;
-      }
 
-      return syncFunc();
-    };
-
-  this.on('kill', function(cb){
-    var that = this;
-    log.debug('Killing ' + PROCESS_NAME + ' on ' + that.vm_name);
-    vb.kill({
-      user: that.credentials.user,
-      password: that.credentials.password,
-      vm: that.vm_name,
-      cmd: 'iexplore.exe'
-    }, function() {
-      log.debug('Succesfully killed process ' + PROCESS_NAME + ' on ' + that.vm_name);
-      cb();
-    });
-  });
+            that.once('kill', function(done) {
+              done();
+              vb.sessionClose({
+                sessionId: session.sessionId,
+                name: that.vm_name
+              }, function(err) {
+                if (err) {
+                  throw err;
+                }
+              });
+            });
+        });
+    }
 
     // @todo need to queue these up if there's > 1 VM
     this._start = function(url) {
@@ -169,39 +119,4 @@ function VirtualBoxBrowserInstance(baseBrowserDecorator, logger, args) {
 
         });
     };
-
-  var baseKill = this.kill;
-  var poweroff = false;
-  this.kill = function() {
-    var that = this;
-    var conf = {
-      user: that.credentials.user,
-      password: that.credentials.password,
-      vm: that.vm_name
-    };
-    if (!poweroff)
-    vb.exec(extend(conf, {cmd: 'C:\\Windows\\System32\\wbem\\wmic.exe Path win32_Process where "Name=\'' + processName + '\'" call Terminate'}),  function(err){
-      if (err) {
-        throw err;
-      }
-      if (args.config.shutdown){
-        vb.exec(extend(conf, {cmd: 'shutdown -s -t 00'}),  function(err){
-          if (err) {
-            throw err;
-          } else {
-            poweroff = true;
-          }
-        });
-        // it's command shutdown machine hard, after that windows will starting with recovery
-        /*vb.poweroff(that.vm_name, function(err){
-          if (err) {
-            throw err;
-          } else {
-            poweroff = true;
-          }
-        });*/
-      }
-    });
-    return baseKill.call(this, arguments);
-  };
 }
